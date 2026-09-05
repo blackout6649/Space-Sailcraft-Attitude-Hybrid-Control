@@ -50,7 +50,7 @@ plot(timeHours, angularRateDegPerSec(:, 2), 'LineWidth', 1.6);
 plot(timeHours, angularRateDegPerSec(:, 1), 'LineWidth', 1.6);
 xlabel('time [h]');
 ylabel('angular velocity [deg/s]');
-title('Angular velocity history');
+title('Angular velocity error');
 legend({'yaw rate', 'pitch rate', 'roll rate'}, 'Location', 'best');
 
 % --- Actuator command vs actual histories ---------------------------
@@ -65,8 +65,8 @@ plot(timeHours, vaneCommandDeg(:, 1), '--', 'Color', blue, 'LineWidth', 1.4);
 plot(timeHours, vaneActualDeg(:, 1), '-', 'Color', blue, 'LineWidth', 1.4);
 plot(timeHours, vaneCommandDeg(:, 4), '--', 'Color', orange, 'LineWidth', 1.4);
 plot(timeHours, vaneActualDeg(:, 4), '-', 'Color', orange, 'LineWidth', 1.4);
-plot(timeHours, model_limit_deg(result, 'vane'), ':', 'Color', limitColor, 'LineWidth', 1.1);
-plot(timeHours, -model_limit_deg(result, 'vane'), ':', 'Color', limitColor, 'LineWidth', 1.1);
+plot(timeHours, model_limit_deg(result, 'rollYaw'), ':', 'Color', limitColor, 'LineWidth', 1.1);
+plot(timeHours, -model_limit_deg(result, 'rollYaw'), ':', 'Color', limitColor, 'LineWidth', 1.1);
 ylabel('deflection [deg]');
 title('Roll/yaw vanes: commanded vs actual');
 legend({'\delta_1 cmd', '\delta_1 actual', '\delta_4 cmd', '\delta_4 actual'}, 'Location', 'best');
@@ -75,8 +75,8 @@ plot(timeHours, vaneCommandDeg(:, 2), '--', 'Color', green, 'LineWidth', 1.4);
 plot(timeHours, vaneActualDeg(:, 2), '-', 'Color', green, 'LineWidth', 1.4);
 plot(timeHours, vaneCommandDeg(:, 3), '--', 'Color', purple, 'LineWidth', 1.4);
 plot(timeHours, vaneActualDeg(:, 3), '-', 'Color', purple, 'LineWidth', 1.4);
-plot(timeHours, model_limit_deg(result, 'vane'), ':', 'Color', limitColor, 'LineWidth', 1.1);
-plot(timeHours, -model_limit_deg(result, 'vane'), ':', 'Color', limitColor, 'LineWidth', 1.1);
+plot(timeHours, model_limit_deg(result, 'pitch'), ':', 'Color', limitColor, 'LineWidth', 1.1);
+plot(timeHours, -model_limit_deg(result, 'pitch'), ':', 'Color', limitColor, 'LineWidth', 1.1);
 xlabel('time [h]');
 ylabel('deflection [deg]');
 title('Pitch vanes: commanded vs actual');
@@ -109,12 +109,12 @@ legend({'BL cmd', 'BL actual', 'BR cmd', 'BR actual'}, 'Location', 'best');
 % --- Required moments and additional diagnostic ---------------------
 plotHandles.torqueCommandedVsTotal = figure('Visible', 'on', 'Color', 'w');
 hold on; grid on; box on;
-plot(timeHours, commandTorque(:, 1), 'Color', blue, 'LineWidth', 1.4);
-plot(timeHours, totalTorque(:, 1), 'Color', blue, 'LineWidth', 1.4);
-plot(timeHours, commandTorque(:, 2), 'Color', green, 'LineWidth', 1.4);
-plot(timeHours, totalTorque(:, 2), 'Color', green, 'LineWidth', 1.4);
-plot(timeHours, commandTorque(:, 3), 'Color', orange, 'LineWidth', 1.4);
-plot(timeHours, totalTorque(:, 3), 'Color', orange, 'LineWidth', 1.4);
+plot(timeHours, commandTorque(:, 1),'-', 'Color', blue, 'LineWidth', 1.4);
+plot(timeHours, totalTorque(:, 1),'--', 'Color', blue, 'LineWidth', 1.4);
+plot(timeHours, commandTorque(:, 2),'-', 'Color', green, 'LineWidth', 1.4);
+plot(timeHours, totalTorque(:, 2),'--', 'Color', green, 'LineWidth', 1.4);
+plot(timeHours, commandTorque(:, 3),'-', 'Color', orange, 'LineWidth', 1.4);
+plot(timeHours, totalTorque(:, 3),'--','Color', orange, 'LineWidth', 1.4);
 xlabel('time [h]');
 ylabel('torque [N m]');
 title('Commanded vs actual moments');
@@ -171,8 +171,14 @@ end
 
 function limitDeg = model_limit_deg(result, kind)
 switch kind
-    case 'vane'
+    case 'rollYaw'
         limitDeg = rad2deg(result.parameters.vanes.deflectionLimit) * ones(size(result.time(:)));
+    case 'pitch'
+        if isfield(result.parameters.vanes, 'pitchDeflectionLimit') && ~isempty(result.parameters.vanes.pitchDeflectionLimit)
+            limitDeg = rad2deg(result.parameters.vanes.pitchDeflectionLimit) * ones(size(result.time(:)));
+        else
+            limitDeg = rad2deg(result.parameters.vanes.deflectionLimit) * ones(size(result.time(:)));
+        end
     otherwise
         error('Unknown limit kind.');
 end

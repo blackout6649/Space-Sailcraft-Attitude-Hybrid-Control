@@ -30,6 +30,13 @@ model.initial.rcdReflectivity = reshape(model.initial.rcdReflectivity, 4, 1);
 model.controller.wn = reshape(model.controller.wn, 1, 3);
 model.controller.zeta = reshape(model.controller.zeta, 1, 3);
 model.controller.wi = reshape(model.controller.wi, 1, 3);
+if ~isfield(model.vanes, 'pitchDeflectionLimit') || isempty(model.vanes.pitchDeflectionLimit)
+    model.vanes.pitchDeflectionLimit = model.vanes.deflectionLimit;
+end
+model.vanes.deflectionLimitVector = [model.vanes.deflectionLimit; model.vanes.pitchDeflectionLimit; model.vanes.pitchDeflectionLimit; model.vanes.deflectionLimit];
+if isfield(model.controller, 'useVaneYaw')
+    error('controller.useVaneYaw is no longer supported. Hybrid yaw control is RCD-only.');
+end
 
 if abs(model.geometry.sailArea - model.geometry.sailSide ^ 2) > 1e-9
     error('geometry.sailArea must equal geometry.sailSide^2.');
@@ -120,7 +127,9 @@ result.summary.maxAbsVaneDeflection = max(max(abs(result.vaneDeflection)));
 result.summary.maxAbsRcdReflectivity = max(max(abs(result.rcdReflectivity)));
 result.summary.maxAbsCommandTorque = max(max(abs(result.command.torque)));
 result.summary.maxAbsTotalTorque = max(max(abs(result.torque.total)));
-result.summary.vaneDeflectionSaturated = any(any(abs(result.vaneDeflection) >= model.vanes.deflectionLimit - 1e-12));
+result.summary.vaneDeflectionSaturated = any(any(abs(result.vaneDeflection) >= (model.vanes.deflectionLimitVector.' - 1e-12)));
+result.summary.rollYawVaneSaturated = any(any(abs(result.vaneDeflection(:, [1 4])) >= model.vanes.deflectionLimit - 1e-12));
+result.summary.pitchVaneSaturated = any(any(abs(result.vaneDeflection(:, [2 3])) >= model.vanes.pitchDeflectionLimit - 1e-12));
 result.summary.rcdReflectivitySaturated = any(any(abs(result.rcdReflectivity) >= model.rcd.reflectivityLimit - 1e-12));
 end
 
@@ -141,7 +150,7 @@ qTVecDot = 0.5 * (qTScalar * eye(3) + skew(qTVec)) * omegaT;
 qTScalarDot = -0.5 * (qTVec.' * omegaT);
 
 % Actuator states lag their commands through first-order models.
-deltaTdot = sat((sat(sample.deltaTcmd, model.vanes.deflectionLimit) - deltaT) / model.vanes.timeConstant, model.vanes.rateLimit);
+deltaTdot = sat((sat(sample.deltaTcmd, model.vanes.deflectionLimitVector) - deltaT) / model.vanes.timeConstant, model.vanes.rateLimit);
 deltaRhoTdot = (sat(sample.deltaRhoTcmd, model.rcd.reflectivityLimit) - deltaRhoT) / model.rcd.timeConstant;
 
 % Anti-windup stops the integral state at the requested torque cap.
@@ -188,13 +197,7 @@ TxV = Tc(1);                % Vane roll control allocation
 TxGain = model.derived.vaneForce * model.derived.vaneMomentArm * alphaCos2;
 DeltaCmd = TxV / max(TxGain, model.controller.esing);
 ThetaCmd = 0;
-TzV = 0;                    % Vane yaw control allocation, if disabled
-if model.controller.useVaneYaw 
-    % Common-mode vane motion provides second-order yaw control.
-    ThetaCmd = (2 / 3) * Tc(3) * TxV / (TxV ^ 2 + model.vanes.muTx ^ 2);
-    ThetaCmd = max(-model.vanes.thetaLimit, min(model.vanes.thetaLimit, ThetaCmd));
-    TzV = 1.5 * TxV * ThetaCmd; % Vane yaw control allocation, if enabled
-end
+TzV = 0;
 
 TzR = Tc(3) - TzV;          % RCD yaw control allocation
 dpCmd = TyV / (4 * model.derived.vaneForce * model.derived.vaneMomentArm * cos(alphaT) * sin(alphaT) + model.controller.esing); 

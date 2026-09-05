@@ -62,8 +62,12 @@ model.derived.integralLimit = model.controller.Tintmx ./ max(diag(model.derived.
 % qd is the desired body attitude relative to the sun-line frame.
 targetDcm = C2(-model.environment.alphaCmd);
 model.derived.qd = dcm2quat(targetDcm);
-initialErrorDcm = C1(model.initial.attitudeError321(1)) * C2(model.initial.attitudeError321(2)) * C3(model.initial.attitudeError321(3));
-qT0 = dcm2quat(initialErrorDcm * targetDcm);
+
+% The user provides the initial body attitude in the sun-line frame.
+initialBodyDcm = C1(model.initial.absoluteEuler321(1)) * C2(model.initial.absoluteEuler321(2)) * C3(model.initial.absoluteEuler321(3));
+qT0 = dcm2quat(initialBodyDcm);
+model.initial.derivedSunAngle = acos(max(-1, min(1, initialBodyDcm(1, 1))));
+model.initial.derivedSunAngleError = model.initial.derivedSunAngle - model.environment.alphaCmd;
 
 % State = qT, omegaT, z, deltaT, DeltaRhoT.
 x0 = [qT0; model.initial.angularRate; model.initial.integralState; model.initial.vaneDeflection; model.initial.rcdReflectivity];
@@ -71,7 +75,8 @@ stepCount = round(model.scenario.tEnd / model.scenario.dt);
 tGrid = (0:stepCount).' * model.scenario.dt;
 
 % Integrate the full closed-loop model, then sample derived outputs on the same grid.
-[tGrid, stateHistory] = ode45(@(time, state) state_derivative(time, state, model), tGrid, x0);
+[solverTime, solverState] = ode45(@(time, state) state_derivative(time, state, model), [tGrid(1) tGrid(end)], x0);
+stateHistory = interp1(solverTime, solverState, tGrid, 'linear', 'extrap');
 stateHistory(:, 1:4) = normalize_quaternion_history(stateHistory(:, 1:4));
 
 % --- Output storage ---------------------------------------------------
@@ -183,7 +188,9 @@ bodyDcm = quat2dcm(qT);
 thetaE321 = dcm2euler321(quat2dcm(qe));
 thetaT321 = dcm2euler321(bodyDcm);
 alphaT = acos(max(-1, min(1, bodyDcm(1, 1))));
-alphaCos2 = cos(alphaT) ^ 2;
+cosAlphaT = bodyDcm(1, 1);
+cosAlphaIll = max(0, cosAlphaT);
+alphaCos2 = cosAlphaIll ^ 2;
 
 % Quaternion PID torque command.
 qeVec = qe(1:3);
@@ -200,7 +207,7 @@ ThetaCmd = 0;
 TzV = 0;
 
 TzR = Tc(3) - TzV;          % RCD yaw control allocation
-dpCmd = TyV / (4 * model.derived.vaneForce * model.derived.vaneMomentArm * cos(alphaT) * sin(alphaT) + model.controller.esing); 
+dpCmd = TyV / (4 * model.derived.vaneForce * model.derived.vaneMomentArm * cosAlphaIll * sin(alphaT) + model.controller.esing); 
 deltaTcmd = [0.5 * (ThetaCmd + DeltaCmd); -dpCmd; dpCmd; 0.5 * (ThetaCmd - DeltaCmd)]; % Vane deflection command
 
 % The RCD command comes from the pitch/yaw allocation inverse.
@@ -212,9 +219,11 @@ deltaRhoTcmd = (1 / max(4 * kr, model.controller.esing)) * [
     -TyR + TzR];
 
 % Actual torques use the realized actuator states, not the commands.
+cosAlphaD2 = max(0, cos(alphaT - deltaT(2)));
+cosAlphaD3 = max(0, cos(alphaT - deltaT(3)));
 Tvanes = [
     model.derived.vaneForce * model.derived.vaneMomentArm * alphaCos2 * (cos(deltaT(1)) ^ 2 * sin(deltaT(1)) - cos(deltaT(4)) ^ 2 * sin(deltaT(4)));
-    model.derived.vaneForce * model.derived.vaneMomentArm * (-cos(alphaT - deltaT(2)) ^ 2 * cos(deltaT(2)) + cos(alphaT - deltaT(3)) ^ 2 * cos(deltaT(3)));
+    model.derived.vaneForce * model.derived.vaneMomentArm * (-cosAlphaD2 ^ 2 * cos(deltaT(2)) + cosAlphaD3 ^ 2 * cos(deltaT(3)));
    -model.derived.vaneForce * model.derived.vaneMomentArm * alphaCos2 * (cos(deltaT(1)) ^ 3 - cos(deltaT(4)) ^ 3)];
 
 Trcd = [

@@ -22,7 +22,7 @@ model.controller = controller;
 model.scenario = scenario;
 
 % --- Input shaping ----------------------------------------------------
-model.initial.attitudeError321 = reshape(model.initial.attitudeError321, 3, 1);
+model.initial.absoluteEuler321 = reshape(model.initial.absoluteEuler321, 3, 1);
 model.initial.angularRate = reshape(model.initial.angularRate, 3, 1);
 model.initial.integralState = reshape(model.initial.integralState, 3, 1);
 model.initial.vaneDeflection = reshape(model.initial.vaneDeflection, 4, 1);

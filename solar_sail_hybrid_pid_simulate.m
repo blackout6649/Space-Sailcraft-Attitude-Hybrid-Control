@@ -11,7 +11,7 @@ elseif nargin < 3
     error('Pass parameters, controller, and scenario, or call with no inputs.');
 end
 
-% Group inputs once so the rest of the function reads like the model.
+% Consolidate all inputs into a single 'model' struct for cleaner code flow
 model.initial = parameters.initial;
 model.geometry = parameters.geometry;
 model.environment = parameters.environment;
@@ -21,7 +21,8 @@ model.disturbance = parameters.disturbance;
 model.controller = controller;
 model.scenario = scenario;
 
-% --- Input shaping ----------------------------------------------------
+% --- Input Validation and Reshaping -----------------------------------
+% Ensure all vector inputs are column vectors
 model.initial.absoluteEuler321 = reshape(model.initial.absoluteEuler321, 3, 1);
 model.initial.angularRate = reshape(model.initial.angularRate, 3, 1);
 model.initial.integralState = reshape(model.initial.integralState, 3, 1);
@@ -59,7 +60,7 @@ model.derived.Kp = diag(2 * principalInertia .* (model.controller.wn .^ 2 + 2 * 
 model.derived.Ki = diag(2 * principalInertia .* model.controller.wn .^ 2 .* model.controller.wi);
 model.derived.integralLimit = model.controller.Tintmx ./ max(diag(model.derived.Ki).', 1e-30);
 
-% qd is the desired body attitude relative to the sun-line frame.
+% Desired attitude: pitch to align with sun-line (Euler angle 2)
 targetDcm = C2(-model.environment.alphaCmd);
 model.derived.qd = dcm2quat(targetDcm);
 
@@ -69,12 +70,17 @@ qT0 = dcm2quat(initialBodyDcm);
 model.initial.derivedSunAngle = acos(max(-1, min(1, initialBodyDcm(1, 1))));
 model.initial.derivedSunAngleError = model.initial.derivedSunAngle - model.environment.alphaCmd;
 
-% State = qT, omegaT, z, deltaT, DeltaRhoT.
+% State vector: [qT (4), omegaT (3), z (3), deltaT (4), rhoT (4)] = 18 states
+% qT: quaternion (body relative to sun-line frame)
+% omegaT: angular velocity
+% z: integral state for PID controller
+% deltaT: vane deflection angles [roll1, pitch2, pitch3, roll4]
+% rhoT: RCD reflectivity modulation [quadrant1-4]
 x0 = [qT0; model.initial.angularRate; model.initial.integralState; model.initial.vaneDeflection; model.initial.rcdReflectivity];
 stepCount = round(model.scenario.tEnd / model.scenario.dt);
 tGrid = (0:stepCount).' * model.scenario.dt;
 
-% Integrate the full closed-loop model, then sample derived outputs on the same grid.
+% Integrate full closed-loop dynamics using ode45, then resample to uniform time grid
 [solverTime, solverState] = ode45(@(time, state) state_derivative(time, state, model), [tGrid(1) tGrid(end)], x0);
 stateHistory = interp1(solverTime, solverState, tGrid, 'linear', 'extrap');
 stateHistory(:, 1:4) = normalize_quaternion_history(stateHistory(:, 1:4));
@@ -103,6 +109,7 @@ result.torque.total = zeros(stepCount + 1, 3);
 result.torque.afterActuatorDelay = zeros(stepCount + 1, 3);
 
 % --- Sample outputs on the requested time grid -----------------------
+% Extract control, torque, and error signals at each time step for plotting
 for stepIndex = 1:(stepCount + 1)
     sample = sample_state(stateHistory(stepIndex, :).', model);
     result.attitudeError321(stepIndex, :) = sample.attitudeError321.';
@@ -153,18 +160,18 @@ z = state(8:10);
 deltaT = state(11:14);
 deltaRhoT = state(15:18);
 
-% Rigid-body attitude dynamics.
+% Euler rotational equations: dW/dt = J^-1 * (tau - W x J*W)
 omegaTdot = model.derived.inertiaInverse * (-cross(omegaT, model.derived.inertia * omegaT) + sample.Ttotal);
 qTVec = qT(1:3);
 qTScalar = qT(4);
 qTVecDot = 0.5 * (qTScalar * eye(3) + skew(qTVec)) * omegaT;
 qTScalarDot = -0.5 * (qTVec.' * omegaT);
 
-% Actuator states lag their commands through first-order models.
+% First-order actuator dynamics with saturation and rate limits
 deltaTdot = sat((sat(sample.deltaTcmd, model.vanes.deflectionLimitVector) - deltaT) / model.vanes.timeConstant, model.vanes.rateLimit);
 deltaRhoTdot = (sat(sample.deltaRhoTcmd, model.rcd.reflectivityLimit) - deltaRhoT) / model.rcd.timeConstant;
 
-% Anti-windup stops the integral state at the requested torque cap.
+% Integral error accumulation with anti-windup protection
 zdot = sample.qeVec;
 for axisIndex = 1:3
     if abs(z(axisIndex)) >= model.derived.integralLimit(axisIndex) && sign(zdot(axisIndex)) == sign(z(axisIndex))
@@ -259,10 +266,11 @@ Tvanes = [
     model.derived.vaneForce * model.derived.vaneMomentArm * (-cosAlphaD2 ^ 2 * cos(deltaT(2)) + cosAlphaD3 ^ 2 * cos(deltaT(3)));
    -model.derived.vaneForce * model.derived.vaneMomentArm * alphaCos2 * (cos(deltaT(1)) ^ 3 - cos(deltaT(4)) ^ 3)];
 
+% RCD torques from reflectivity modulation (pitch and yaw only)
 Trcd = [
-    0;
-    model.rcd.centroidOffset * model.environment.Psrp * model.rcd.quadrantArea * alphaCos2 * (deltaRhoT(2) + deltaRhoT(3) - deltaRhoT(1) - deltaRhoT(4));
-    model.rcd.centroidOffset * model.environment.Psrp * model.rcd.quadrantArea * alphaCos2 * (deltaRhoT(3) + deltaRhoT(4) - deltaRhoT(2) - deltaRhoT(1))];
+    0;                                          % Roll torque: zero from RCD
+    model.rcd.centroidOffset * model.environment.Psrp * model.rcd.quadrantArea * alphaCos2 * (deltaRhoT(2) + deltaRhoT(3) - deltaRhoT(1) - deltaRhoT(4));  % Pitch
+    model.rcd.centroidOffset * model.environment.Psrp * model.rcd.quadrantArea * alphaCos2 * (deltaRhoT(3) + deltaRhoT(4) - deltaRhoT(2) - deltaRhoT(1))];  % Yaw
 
 Tdist = [0; 0; 0];
 if model.disturbance.enable

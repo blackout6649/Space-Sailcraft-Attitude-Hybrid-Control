@@ -2,8 +2,11 @@ clc;
 clearvars;
 close all;
 
-% Initial conditions for each simulation case.
-% Euler angles are specified in degrees; angular rates are in rad/s.
+% Batch Simulation Runner: Execute multiple attitude control scenarios
+% Compares controller performance across different initial conditions
+
+% --- Define Test Cases -------------------------------------------
+% Initial conditions: Euler angles in degrees, angular rates in rad/s
 simulationCases = [
 	struct('name', 'Zero attitude and rate', ...
 		'eulerAnglesDeg', [0; 0; 0], ...
@@ -16,6 +19,7 @@ simulationCases = [
 		'angularRateRadPerSec', [0.02; 0.02; 0.02])
 ];
 
+% --- Execute Each Case -----------------------------------------------
 for caseIndex = 1:numel(simulationCases)
 	simulationCase = simulationCases(caseIndex);
 	fprintf('Running case %d: %s\n', caseIndex, simulationCase.name);

@@ -1,22 +1,56 @@
 # Space-Sailcraft-Attitude-Hybrid-Control
 
-Main entry points:
+A MATLAB simulation framework for solar sailcraft attitude control using hybrid vane/RCD (Reflectivity Control Device) PID controllers.
 
-- `solar_sail_attitude_control_Comparison()` runs the default case and saves the result in `solarSailResult` when called without an output.
-- `solar_sail_hybrid_pid_simulate(parameters, controller, scenario)` runs one hybrid PID scenario and returns the result struct.
-- `solar_sail_hybrid_pid_defaults()` returns the default parameter, controller, and scenario structs.
-- `solar_sail_hybrid_pid_plot_results(result, scenario)` plots attitude, rate, actuator, and torque histories from a simulation result.
+## Main Entry Points
 
-Use the wrapper when you just want to press Run. Use the core function when you want to change parameters, controller settings, or scenario settings.
-Set `scenario.savePlots = true` and `scenario.plotFolder = 'plots'` to save PNGs into a dedicated plots folder.
+- **`solar_sail_attitude_control_Comparison(Euler0, AngularRate0)`** — Wrapper that runs a complete simulation with the given initial conditions and plots results. Returns result to `solarSailResult` when called without output argument.
+  
+- **`solar_sail_hybrid_pid_simulate(parameters, controller, scenario)`** — Core simulation function. Runs one hybrid PID scenario and returns the result struct. If called with no inputs, uses defaults.
 
-Example:
+- **`solar_sail_hybrid_pid_defaults(Euler0, AngularRate0)`** — Returns default parameter, controller, and scenario structs. Can optionally accept initial Euler angles and angular rates.
 
+- **`solar_sail_hybrid_pid_plot_results(result, scenario)`** — Plots five figures showing attitude/rate errors, actuator histories, commanded vs. actual moments, moment breakdown, and sun angle error.
+
+- **`solar_sail_attitude_control_Main.m`** — Batch runner that executes multiple simulation cases with different initial conditions.
+
+## Usage Examples
+
+**Quick run with defaults:**
 ```matlab
-solar_sail_attitude_control_Comparison
-
-defaults = solar_sail_hybrid_pid_defaults();
-result = solar_sail_hybrid_pid_simulate(defaults.parameters, defaults.controller, defaults.scenario);
+solar_sail_attitude_control_Comparison()
 ```
 
-The result includes state histories, Euler-angle histories, actuator histories, commanded quantities, torque decomposition histories, prepared parameters, and summary metrics.
+**Run with custom initial conditions:**
+```matlab
+Euler0 = [55; 55; 55] * pi/180;        % Radians
+AngularRate0 = [0.02; 0.02; 0.02];     % rad/s
+solar_sail_attitude_control_Comparison(Euler0, AngularRate0)
+```
+
+**Custom simulation with modified parameters:**
+```matlab
+defaults = solar_sail_hybrid_pid_defaults(Euler0, AngularRate0);
+defaults.controller.wn = [1.5e-3 1.5e-3 1.5e-3];  % Adjust natural frequencies
+result = solar_sail_hybrid_pid_simulate(defaults.parameters, defaults.controller, defaults.scenario);
+solar_sail_hybrid_pid_plot_results(result, defaults.scenario);
+```
+
+**Save plots to folder:**
+```matlab
+defaults = solar_sail_hybrid_pid_defaults();
+defaults.scenario.savePlots = true;
+defaults.scenario.plotFolder = 'plots';
+result = solar_sail_hybrid_pid_simulate(defaults.parameters, defaults.controller, defaults.scenario);
+solar_sail_hybrid_pid_plot_results(result, defaults.scenario);
+```
+
+## Output
+
+Simulation results include:
+- State histories (position, velocity, attitude, rates)
+- Euler angle histories (321 sequence)
+- Actuator command and actual deflection histories (vanes and RCD)
+- Torque decomposition (vanes, RCD, disturbance contributions)
+- Commanded vs. actual control moments
+- Summary metrics and performance data

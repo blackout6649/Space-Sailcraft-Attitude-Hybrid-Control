@@ -49,8 +49,8 @@ model.derived.inertia = model.geometry.inertia;
 model.derived.inertiaInverse = inv(model.geometry.inertia);
 model.derived.trimAlpha = atan(1 / sqrt(2));
 model.derived.vaneTipDistance = model.geometry.sailSide / sqrt(2);
-model.derived.vaneMomentArm = model.derived.vaneTipDistance + model.geometry.vaneExtension / 3;
-model.derived.vaneForce = 2 * model.environment.Psrp * model.geometry.vaneArea;
+model.derived.vaneMomentArm = model.derived.vaneTipDistance;                    % L, Sec. 2.4.1
+model.derived.vaneForce = model.environment.eta * model.environment.Psrp * model.geometry.vaneArea;  % Fc = eta P Ac, Sec. 2.4.1
 model.derived.solarForce = model.environment.eta * model.environment.Psrp * model.geometry.sailArea;
 
 principalInertia = diag(model.derived.inertia).';
@@ -96,8 +96,11 @@ result.command.theta = zeros(stepCount + 1, 1);
 result.command.delta = zeros(stepCount + 1, 1);
 result.torque.vanes = zeros(stepCount + 1, 3);
 result.torque.rcd = zeros(stepCount + 1, 3);
+result.torque.vanesCommanded = zeros(stepCount + 1, 3);
+result.torque.rcdCommanded = zeros(stepCount + 1, 3);
 result.torque.disturbance = zeros(stepCount + 1, 3);
 result.torque.total = zeros(stepCount + 1, 3);
+result.torque.afterActuatorDelay = zeros(stepCount + 1, 3);
 
 % --- Sample outputs on the requested time grid -----------------------
 for stepIndex = 1:(stepCount + 1)
@@ -116,8 +119,11 @@ for stepIndex = 1:(stepCount + 1)
     result.command.delta(stepIndex) = sample.DeltaCmd;
     result.torque.vanes(stepIndex, :) = sample.Tvanes.';
     result.torque.rcd(stepIndex, :) = sample.Trcd.';
+    result.torque.vanesCommanded(stepIndex, :) = sample.TvanesCmd.';
+    result.torque.rcdCommanded(stepIndex, :) = sample.TrcdCmd.';
     result.torque.disturbance(stepIndex, :) = sample.Tdist.';
     result.torque.total(stepIndex, :) = sample.Ttotal.';
+    result.torque.afterActuatorDelay(stepIndex, :) = sample.Tactuator.';
 end
 
 % --- Summary metrics --------------------------------------------------
@@ -201,14 +207,31 @@ gammaY = 1 - (1 - model.controller.gamma0) * min(1, sin(alphaT) / sin(model.cont
 TyV = (1 - gammaY) * Tc(2); % Vane pitch control allocation
 TyR = gammaY * Tc(2);       % RCD pitch control allocation
 TxV = Tc(1);                % Vane roll control allocation
-TxGain = model.derived.vaneForce * model.derived.vaneMomentArm * alphaCos2;
-DeltaCmd = TxV / max(TxGain, model.controller.esing);
-ThetaCmd = 0;
-TzV = 0;
-
+TzV = 0;                    % vane yaw authority is not used (Sec. 3.2.3)
 TzR = Tc(3) - TzV;          % RCD yaw control allocation
-dpCmd = TyV / (4 * model.derived.vaneForce * model.derived.vaneMomentArm * cosAlphaIll * sin(alphaT) + model.controller.esing); 
-deltaTcmd = [0.5 * (ThetaCmd + DeltaCmd); -dpCmd; dpCmd; 0.5 * (ThetaCmd - DeltaCmd)]; % Vane deflection command
+
+% Vane command definitions, Sec. 2.4.4 Eq. (23):
+%     delta_rc = Tx / (Fc L cos^2(alpha))
+%     delta_pc = Ty / (4 Fc L cos^2(alpha) sin(alpha))
+vaneGain = model.derived.vaneForce * model.derived.vaneMomentArm * alphaCos2;
+deltaRc = TxV / max(vaneGain, model.controller.esing);
+deltaPc = TyV / (4 * vaneGain * sin(alphaT) + model.controller.esing);
+
+%     delta_1c = +delta_rc/2 , delta_4c = -delta_rc/2 , delta_2c = -delta_pc , delta_3c = +delta_pc
+deltaTcmd = [ 0.5 * deltaRc; -deltaPc; deltaPc; -0.5 * deltaRc ];
+
+DeltaCmd = deltaRc;         % retained for the recorded output
+ThetaCmd = 0;               % common mode is unused, delta_4c = -delta_1c
+
+% The commanded deflections may never exceed the mechanical stops
+% |delta_rc| <= delta_rc,max and |delta_pc| <= delta_pc,max (Sec. 2.4.7).
+for vaneIndex = 1:4
+    if deltaTcmd(vaneIndex) > model.vanes.deflectionLimitVector(vaneIndex)
+        deltaTcmd(vaneIndex) = model.vanes.deflectionLimitVector(vaneIndex);
+    elseif deltaTcmd(vaneIndex) < -model.vanes.deflectionLimitVector(vaneIndex)
+        deltaTcmd(vaneIndex) = -model.vanes.deflectionLimitVector(vaneIndex);
+    end
+end
 
 % The RCD command comes from the pitch/yaw allocation inverse.
 kr = model.environment.Psrp * model.rcd.quadrantArea * alphaCos2 * model.rcd.centroidOffset;
@@ -217,6 +240,16 @@ deltaRhoTcmd = (1 / max(4 * kr, model.controller.esing)) * [
      TyR - TzR;
      TyR + TzR;
     -TyR + TzR];
+
+% The commanded reflectivity increments may never exceed the optical limit
+% |Delta rho_i| <= Delta rho_max (Sec. 2.5.5).
+for quadrantIndex = 1:4
+    if deltaRhoTcmd(quadrantIndex) > model.rcd.reflectivityLimit
+        deltaRhoTcmd(quadrantIndex) = model.rcd.reflectivityLimit;
+    elseif deltaRhoTcmd(quadrantIndex) < -model.rcd.reflectivityLimit
+        deltaRhoTcmd(quadrantIndex) = -model.rcd.reflectivityLimit;
+    end
+end
 
 % Actual torques use the realized actuator states, not the commands.
 cosAlphaD2 = max(0, cos(alphaT - deltaT(2)));
@@ -248,8 +281,11 @@ sample.ThetaCmd = ThetaCmd;
 sample.DeltaCmd = DeltaCmd;
 sample.Tvanes = Tvanes;
 sample.Trcd = Trcd;
+sample.TvanesCmd = [TxV; TyV; TzV];
+sample.TrcdCmd = [0; TyR; TzR];
 sample.Tdist = Tdist;
-sample.Ttotal = Tvanes + Trcd + Tdist;
+sample.Tactuator = Tvanes + Trcd;
+sample.Ttotal = sample.Tactuator + Tdist;
 end
 
 % --- Utility helpers --------------------------------------------------
